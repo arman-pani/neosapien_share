@@ -1,11 +1,10 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-import 'package:neosapien_share/features/identity/identity_provider.dart';
-import 'package:neosapien_share/features/identity/identity_repository.dart';
-import 'package:neosapien_share/features/identity/identity_state.dart';
-import 'package:neosapien_share/features/receive/incoming_transfers_provider.dart';
+import 'package:neosapien_share/domain/entities/identity_state.dart';
+import 'package:neosapien_share/domain/interfaces/identity_repository.dart';
 import 'package:neosapien_share/domain/entities/incoming_transfer.dart';
+import 'package:neosapien_share/features/identity/providers/identity_provider.dart';
+import 'package:neosapien_share/features/receive/providers/incoming_transfers_provider.dart';
 import 'package:neosapien_share/main.dart';
 
 void main() {
@@ -17,7 +16,7 @@ void main() {
             _FakeIdentityRepository(),
           ),
           incomingTransfersProvider.overrideWith(
-            () => _FakeIncomingTransfersNotifier(),
+            () => _FakeIncomingTransfers(),
           ),
         ],
         child: const NeoSapienShareApp(),
@@ -43,9 +42,7 @@ class _FakeIdentityRepository implements IdentityRepository {
   Future<void> refreshFcmToken(String shortCode) async {}
 }
 
-class _FakeIncomingTransfersNotifier
-    extends StreamNotifier<List<IncomingTransfer>>
-    implements IncomingTransfersNotifier {
+class _FakeIncomingTransfers extends IncomingTransfers {
   @override
   Stream<List<IncomingTransfer>> build() => Stream.value([]);
 }

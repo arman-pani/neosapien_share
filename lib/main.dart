@@ -2,14 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'core/di/providers.dart';
-import 'core/router/app_router.dart';
-import 'core/theme/app_theme.dart';
-import 'data/remote_data_sources/firebase_service.dart';
-import 'features/identity/identity_provider.dart';
-import 'features/receive/incoming_transfers_provider.dart';
-import 'features/receive/notification_service.dart';
-import 'features/receive/transfer_notification_handler.dart';
+import 'package:neosapien_share/core/di/providers.dart';
+import 'package:neosapien_share/core/router/app_router.dart';
+import 'package:neosapien_share/core/theme/app_theme.dart';
+import 'package:neosapien_share/data/remote_data_sources/firebase_service.dart';
+import 'package:neosapien_share/features/identity/providers/identity_provider.dart';
+import 'package:neosapien_share/features/receive/providers/incoming_transfers_provider.dart';
+import 'package:neosapien_share/core/services/notification_service.dart';
+import 'package:neosapien_share/features/receive/providers/transfer_notification_handler.dart';
 
 /// Global key so NotificationService can show SnackBars from any context.
 final _scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();

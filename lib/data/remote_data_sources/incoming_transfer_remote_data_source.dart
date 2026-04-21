@@ -75,6 +75,14 @@ class IncomingTransferRemoteDataSource {
 
     return IncomingTransfer.fromFirestore(doc.id, data, files);
   }
+
+  /// Updates the status of a specific transfer.
+  Future<void> updateTransferStatus(String transferId, String status) async {
+    await _firestore
+        .collection('transfers')
+        .doc(transferId)
+        .update({'status': status});
+  }
 }
 
 // ---------------------------------------------------------------------------

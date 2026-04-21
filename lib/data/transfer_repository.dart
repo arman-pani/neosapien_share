@@ -266,7 +266,7 @@ class FirebaseTransferRepository implements TransferRepository {
         .doc(transferId);
     final expiresAt = DateTime.now().add(const Duration(hours: 72));
 
-    print('[TransferRepo] Initializing Firestore record for $transferId');
+
     try {
       if (!isRetry) {
         await transferRef.set({
@@ -297,14 +297,14 @@ class FirebaseTransferRepository implements TransferRepository {
         }
       }
     } catch (e) {
-      print('[TransferRepo] FAILED to initialize Firestore: $e');
+
       rethrow;
     }
 
     for (final file in files) {
       if (_cancelled[transferId] == true) return;
 
-      print('[TransferRepo] Starting upload for file: ${file.name}');
+
       await _uploadFile(
         transferId: transferId,
         transferRef: transferRef,
@@ -340,9 +340,9 @@ class FirebaseTransferRepository implements TransferRepository {
     }
 
     try {
-      print('[TransferRepo] Calculating SHA-256 for ${file.name} (on background isolate)');
+
       final sha256Hash = await compute(_computeFileSha256, file.path);
-      print('[TransferRepo] SHA-256 complete: $sha256Hash');
+
 
       if (_cancelled[transferId] == true) return;
 
@@ -351,12 +351,12 @@ class FirebaseTransferRepository implements TransferRepository {
       int offset = 0;
 
       if (sessionUri != null) {
-        print('[TransferRepo] Found existing resumable session for ${file.name}: $sessionUri');
+
         // Query current upload status to see how many bytes were already uploaded
         offset = await _querySessionOffset(sessionUri);
-        print('[TransferRepo] Resuming ${file.name} from offset: $offset');
+
       } else {
-        print('[TransferRepo] Initiating NEW resumable upload session for ${file.name}...');
+
         sessionUri = await _initiateResumableUpload(
           transferId: transferId,
           fileId: file.fileId,
@@ -364,7 +364,7 @@ class FirebaseTransferRepository implements TransferRepository {
           mimeType: file.mimeType,
         );
         await _prefs.setString(sessionKey, sessionUri);
-        print('[TransferRepo] Session established: $sessionUri');
+
       }
 
       if (_cancelled[transferId] == true) return;
@@ -422,10 +422,9 @@ class FirebaseTransferRepository implements TransferRepository {
       }
 
       await fileDocRef.update(updateData);
-    } catch (e, stack) {
+    } catch (e) {
       _activeTasks[transferId]?.remove(file.fileId);
-      print('[TransferRepo] Upload CRITICAL ERROR for ${file.name}: $e');
-      print('[TransferRepo] Stack trace: \n$stack');
+
 
       if (_cancelled[transferId] == true) {
         updateFile(FileUploadProgress(
@@ -458,7 +457,7 @@ class FirebaseTransferRepository implements TransferRepository {
     final url =
         'https://firebasestorage.googleapis.com/v0/b/$bucket/o?uploadType=resumable&name=$path';
 
-    print('[TransferRepo] Sending POST to initiate resumable session: $url');
+
     final response = await _dio.post(
       url,
       options: Options(
@@ -469,7 +468,7 @@ class FirebaseTransferRepository implements TransferRepository {
         },
       ),
     );
-    print('[TransferRepo] Initiation response status: ${response.statusCode}');
+
 
     // Firebase Storage usually returns the session URI in 'x-goog-upload-url'
     // instead of the standard GCS 'location' header.
@@ -477,10 +476,7 @@ class FirebaseTransferRepository implements TransferRepository {
                     ?? response.headers.value('x-goog-upload-url');
 
     if (sessionUri == null) {
-      print('[TransferRepo] Session URI MISSING in both Location and x-goog-upload-url.');
-      response.headers.forEach((name, values) {
-        print('  $name: ${values.join(', ')}');
-      });
+
       throw Exception('Failed to get resumable upload session URI');
     }
     return sessionUri;
@@ -518,7 +514,7 @@ class FirebaseTransferRepository implements TransferRepository {
     // Dio supports piping a Stream as the request body.
     final stream = file.openRead(offset);
 
-    print('[TransferRepo] Starting streaming PUT for ${file.path} from offset $offset');
+
     await _dio.put(
       sessionUri,
       data: stream,
@@ -535,7 +531,7 @@ class FirebaseTransferRepository implements TransferRepository {
         onProgress(sent + offset, totalSize);
       },
     );
-    print('[TransferRepo] Streaming PUT complete for ${file.path}');
+
   }
 
   // ---------------------------------------------------------------------------
