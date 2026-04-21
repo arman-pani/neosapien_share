@@ -118,6 +118,7 @@ abstract class TransferRepository {
   Future<List<TransferRecord>> fetchIncomingTransfers();
 
   TransferUploadOperation uploadTransfer({
+    required String transferId,
     required String senderId,
     required String recipientCode,
     required List<TransferUploadFile> files,

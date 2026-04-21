@@ -51,10 +51,13 @@ class _FcmNotificationHelper {
   static const _channelDescription =
       'Alerts when someone sends you files via NeoSapien Share';
 
+  static bool _initialised = false;
   static final _plugin = FlutterLocalNotificationsPlugin();
   static int _id = 0;
 
   static Future<void> ensureInitialised() async {
+    if (_initialised) return;
+
     const androidSettings =
         AndroidInitializationSettings('@mipmap/ic_launcher');
     const darwinSettings = DarwinInitializationSettings();
@@ -67,6 +70,7 @@ class _FcmNotificationHelper {
       initSettings,
       onDidReceiveNotificationResponse: _onNotificationTap,
     );
+    _initialised = true;
   }
 
   /// Shows a local notification whose payload is the transferId.

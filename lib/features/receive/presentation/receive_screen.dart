@@ -3,11 +3,13 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:open_filex/open_filex.dart';
 
 import '../../../core/di/providers.dart';
 import '../../../domain/entities/incoming_transfer.dart';
 import '../../../data/remote_data_sources/incoming_transfer_remote_data_source.dart';
 import '../incoming_transfers_provider.dart';
+import '../incoming_transfer_detail_provider.dart';
 import '../receive_download_provider.dart';
 
 class ReceiveScreen extends ConsumerStatefulWidget {
@@ -29,92 +31,111 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen> {
   Widget build(BuildContext context) {
     final transfersAsync = ref.watch(incomingTransfersProvider);
     final dlState = ref.watch(receiveDownloadProvider(widget.transferId));
-    final dlNotifier =
-        ref.read(receiveDownloadProvider(widget.transferId).notifier);
-
-    // React to corruption _after_ download finishes
-    ref.listen(
-      receiveDownloadProvider(widget.transferId),
-      (prev, next) {
-        if (next.status == ReceiveDownloadStatus.done &&
-            next.hasCorruption &&
-            mounted) {
-          _showCorruptionDialog(next.corruptFiles);
-        }
-      },
+    final dlNotifier = ref.read(
+      receiveDownloadProvider(widget.transferId).notifier,
     );
 
+    // React to corruption _after_ download finishes
+    ref.listen(receiveDownloadProvider(widget.transferId), (prev, next) {
+      if (next.status == ReceiveDownloadStatus.done &&
+          next.hasCorruption &&
+          mounted) {
+        _showCorruptionDialog(next.corruptFiles);
+      }
+    });
+
     return transfersAsync.when(
-      loading: () => const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      ),
-      error: (e, _) => Scaffold(
-        body: Center(child: Text('Error: $e')),
-      ),
+      loading: () =>
+          const Scaffold(body: Center(child: CircularProgressIndicator())),
+      error: (e, _) => Scaffold(body: Center(child: Text('Error: $e'))),
       data: (transfers) {
         final transfer = transfers.cast<IncomingTransfer?>().firstWhere(
-              (t) => t?.transferId == widget.transferId,
-              orElse: () => null,
-            );
+          (t) => t?.transferId == widget.transferId,
+          orElse: () => null,
+        );
 
-        // Transfer not found — check Firestore directly to distinguish
-        // "expired" from "not found". The real-time listener already excludes
-        // expired docs, so if transferId is missing from the list it is either
-        // loading, expired, or invalid.  We show the expired screen
-        // immediately because the Cloud Function sets status = "expired" and
-        // the listener removes it from the stream.
+        // Transfer not found in the stream — perform a direct fetch fallback.
+        // This handles the race condition where FCM arrives before Firestore sync.
         if (transfer == null) {
-          return _ExpiredTransferScreen(transferId: widget.transferId);
+          final detailAsync = ref.watch(
+            incomingTransferDetailProvider(widget.transferId),
+          );
+
+          return detailAsync.when(
+            loading: () => const Scaffold(
+              body: Center(child: CircularProgressIndicator()),
+            ),
+            error: (e, _) => Scaffold(body: Center(child: Text('Error: $e'))),
+            data: (detail) {
+              if (detail == null || detail.status == 'expired') {
+                return _ExpiredTransferScreen(transferId: widget.transferId);
+              }
+              // We have the detail! Render the screen using the fetched doc.
+              return _buildMainScreen(context, detail, dlState, dlNotifier);
+            },
+          );
         }
 
-        return Scaffold(
-          backgroundColor: const Color(0xFF0D0D14),
-          appBar: AppBar(
-            backgroundColor: const Color(0xFF12121C),
-            foregroundColor: Colors.white,
-            title: const Text(
-              'Incoming Transfer',
-              style: TextStyle(fontWeight: FontWeight.w600),
-            ),
-            leading: BackButton(
-              onPressed: () => context.pop(),
-            ),
-          ),
-          body: SafeArea(
-            child: Column(
-              children: [
-                Expanded(
-                  child: ListView(
-                    padding: const EdgeInsets.all(20),
-                    children: [
-                      _TransferHeader(transfer: transfer),
-                      const SizedBox(height: 24),
-                      if (dlState.status != ReceiveDownloadStatus.idle) ...[
-                        _AggregateProgressBar(progress: dlState.aggregateProgress),
-                        const SizedBox(height: 20),
-                      ],
-                      _FilesList(
-                        transfer: transfer,
-                        dlState: dlState,
-                      ),
-                    ],
-                  ),
-                ),
-                _BottomBar(
-                  transfer: transfer,
-                  dlState: dlState,
-                  onDownloadAll: () {
-                    // Mark the transfer as delivered in Firestore so the
-                    // sender's real-time listener transitions to "delivered".
-                    _markDelivered(widget.transferId);
-                    dlNotifier.downloadAll(transfer);
-                  },
-                ),
-              ],
-            ),
-          ),
-        );
+        return _buildMainScreen(context, transfer, dlState, dlNotifier);
       },
+    );
+  }
+
+  Widget _buildMainScreen(
+    BuildContext context,
+    IncomingTransfer transfer,
+    ReceiveDownloadState dlState,
+    dynamic dlNotifier,
+  ) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0D0D14),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF12121C),
+        foregroundColor: Colors.white,
+        title: const Text(
+          'Incoming Transfer',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+        leading: BackButton(
+          onPressed: () {
+            if (context.canPop()) {
+              context.pop();
+            } else {
+              context.go('/home');
+            }
+          },
+        ),
+      ),
+      body: SafeArea(
+        child: Column(
+          children: [
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.all(20),
+                children: [
+                  _TransferHeader(transfer: transfer),
+                  const SizedBox(height: 24),
+                  if (dlState.status != ReceiveDownloadStatus.idle) ...[
+                    _AggregateProgressBar(progress: dlState.aggregateProgress),
+                    const SizedBox(height: 20),
+                  ],
+                  _FilesList(transfer: transfer, dlState: dlState),
+                ],
+              ),
+            ),
+            _BottomBar(
+              transfer: transfer,
+              dlState: dlState,
+              onDownloadAll: () {
+                // Mark the transfer as delivered in Firestore so the
+                // sender's real-time listener transitions to "delivered".
+                _markDelivered(widget.transferId);
+                dlNotifier.downloadAll(transfer);
+              },
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -207,7 +228,9 @@ class _TransferHeader extends StatelessWidget {
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF7B6FE8).withValues(alpha: 0.3)),
+        border: Border.all(
+          color: const Color(0xFF7B6FE8).withValues(alpha: 0.3),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -276,8 +299,8 @@ class _TransferHeader extends StatelessWidget {
                 color: remaining.isNegative
                     ? const Color(0xFFFF6B6B)
                     : remaining.inHours < 4
-                        ? const Color(0xFFFFA851)
-                        : const Color(0xFF4CAF50),
+                    ? const Color(0xFFFFA851)
+                    : const Color(0xFF4CAF50),
               ),
             ],
           ),
@@ -368,8 +391,9 @@ class _AggregateProgressBar extends StatelessWidget {
               value: value,
               minHeight: 8,
               backgroundColor: const Color(0xFF2A2A3E),
-              valueColor:
-                  const AlwaysStoppedAnimation<Color>(Color(0xFF7B6FE8)),
+              valueColor: const AlwaysStoppedAnimation<Color>(
+                Color(0xFF7B6FE8),
+              ),
             ),
           ),
         ),
@@ -399,17 +423,39 @@ class _FilesList extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         ...transfer.files.map(
-          (f) => Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: _FileProgressCard(
-              file: f,
-              progress: dlState.perFileProgress[f.fileId] ?? 0,
-              fileStatus:
-                  dlState.perFileStatus[f.fileId] ?? FileDownloadStatus.idle,
-            ),
+          (f) => _FileWrapper(
+            file: f,
+            progress: dlState.perFileProgress[f.fileId] ?? 0,
+            dlState: dlState,
           ),
         ),
       ],
+    );
+  }
+}
+
+class _FileWrapper extends StatelessWidget {
+  const _FileWrapper({
+    required this.file,
+    required this.progress,
+    required this.dlState,
+  });
+
+  final TransferFile file;
+  final double progress;
+  final ReceiveDownloadState dlState;
+
+  @override
+  Widget build(BuildContext context) {
+    final fileStatus =
+        dlState.perFileStatus[file.fileId] ?? FileDownloadStatus.idle;
+    final path = dlState.filePaths[file.fileId];
+
+    return _FileProgressCard(
+      file: file,
+      progress: progress,
+      fileStatus: fileStatus,
+      savedPath: path,
     );
   }
 }
@@ -419,128 +465,137 @@ class _FileProgressCard extends StatelessWidget {
     required this.file,
     required this.progress,
     required this.fileStatus,
+    this.savedPath,
   });
 
   final TransferFile file;
   final double progress;
   final FileDownloadStatus fileStatus;
+  final String? savedPath;
 
   @override
   Widget build(BuildContext context) {
     final statusColor = _colorForStatus(fileStatus);
     final statusIcon = _iconForStatus(fileStatus);
 
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF12121C),
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      color: const Color(0xFF1A1A24),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: InkWell(
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: fileStatus == FileDownloadStatus.corrupt
-              ? const Color(0xFFFF6B6B).withValues(alpha: 0.5)
-              : const Color(0xFF2A2A3E),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+        onTap: (fileStatus == FileDownloadStatus.done && savedPath != null)
+            ? () => OpenFilex.open(savedPath ?? "")
+            : null,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(_mimeIcon(file.mimeType), color: const Color(0xFF7B6FE8), size: 20),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  file.name,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
+              Row(
+                children: [
+                  Icon(
+                    _mimeIcon(file.mimeType),
+                    color: const Color(0xFF7B6FE8),
+                    size: 20,
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      file.name,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Icon(statusIcon, color: statusColor, size: 18),
+                ],
               ),
-              const SizedBox(width: 8),
-              Icon(statusIcon, color: statusColor, size: 18),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(
-            '${_formatBytes(file.size)} • ${file.mimeType}',
-            style: const TextStyle(color: Color(0xFF666680), fontSize: 12),
-          ),
-          if (fileStatus == FileDownloadStatus.downloading ||
-              fileStatus == FileDownloadStatus.verifying) ...[
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: TweenAnimationBuilder<double>(
-                      tween: Tween(end: progress),
-                      duration: const Duration(milliseconds: 200),
-                      builder: (context, v, child) => LinearProgressIndicator(
-                        value: v,
-                        minHeight: 5,
-                        backgroundColor: const Color(0xFF2A2A3E),
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          fileStatus == FileDownloadStatus.verifying
-                              ? const Color(0xFFFFA851)
-                              : const Color(0xFF7B6FE8),
+              const SizedBox(height: 6),
+              Text(
+                '${_formatBytes(file.size)} • ${file.mimeType}',
+                style: const TextStyle(color: Color(0xFF666680), fontSize: 12),
+              ),
+              if (fileStatus == FileDownloadStatus.downloading ||
+                  fileStatus == FileDownloadStatus.verifying) ...[
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: TweenAnimationBuilder<double>(
+                          tween: Tween(end: progress),
+                          duration: const Duration(milliseconds: 200),
+                          builder: (context, v, child) =>
+                              LinearProgressIndicator(
+                                value: v,
+                                minHeight: 5,
+                                backgroundColor: const Color(0xFF2A2A3E),
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  fileStatus == FileDownloadStatus.verifying
+                                      ? const Color(0xFFFFA851)
+                                      : const Color(0xFF7B6FE8),
+                                ),
+                              ),
                         ),
                       ),
                     ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  fileStatus == FileDownloadStatus.verifying
-                      ? 'Verifying…'
-                      : '${(progress * 100).toStringAsFixed(0)}%',
-                  style: const TextStyle(
-                    color: Color(0xFFCCCCCC),
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
-                  ),
+                    const SizedBox(width: 8),
+                    Text(
+                      fileStatus == FileDownloadStatus.verifying
+                          ? 'Verifying…'
+                          : '${(progress * 100).toStringAsFixed(0)}%',
+                      style: const TextStyle(
+                        color: Color(0xFFCCCCCC),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
                 ),
               ],
-            ),
-          ],
-          if (fileStatus == FileDownloadStatus.corrupt)
-            const Padding(
-              padding: EdgeInsets.only(top: 8),
-              child: Text(
-                'File corrupted — transfer integrity check failed.',
-                style: TextStyle(
-                  color: Color(0xFFFF6B6B),
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
+              if (fileStatus == FileDownloadStatus.corrupt)
+                const Padding(
+                  padding: EdgeInsets.only(top: 8),
+                  child: Text(
+                    'File corrupted — transfer integrity check failed.',
+                    style: TextStyle(
+                      color: Color(0xFFFF6B6B),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
                 ),
-              ),
-            ),
-        ],
+            ],
+          ),
+        ),
       ),
     );
   }
 
   Color _colorForStatus(FileDownloadStatus s) => switch (s) {
-        FileDownloadStatus.done => const Color(0xFF4CAF50),
-        FileDownloadStatus.corrupt => const Color(0xFFFF6B6B),
-        FileDownloadStatus.failed => const Color(0xFFFF6B6B),
-        FileDownloadStatus.verifying => const Color(0xFFFFA851),
-        FileDownloadStatus.downloading => const Color(0xFF7B6FE8),
-        FileDownloadStatus.idle => const Color(0xFF444466),
-      };
+    FileDownloadStatus.done => const Color(0xFF4CAF50),
+    FileDownloadStatus.corrupt => const Color(0xFFFF6B6B),
+    FileDownloadStatus.failed => const Color(0xFFFF6B6B),
+    FileDownloadStatus.verifying => const Color(0xFFFFA851),
+    FileDownloadStatus.downloading => const Color(0xFF7B6FE8),
+    FileDownloadStatus.idle => const Color(0xFF444466),
+  };
 
   IconData _iconForStatus(FileDownloadStatus s) => switch (s) {
-        FileDownloadStatus.done => Icons.check_circle_rounded,
-        FileDownloadStatus.corrupt => Icons.error_rounded,
-        FileDownloadStatus.failed => Icons.cancel_rounded,
-        FileDownloadStatus.verifying => Icons.verified_rounded,
-        FileDownloadStatus.downloading => Icons.downloading_rounded,
-        FileDownloadStatus.idle => Icons.radio_button_unchecked_rounded,
-      };
+    FileDownloadStatus.done => Icons.check_circle_rounded,
+    FileDownloadStatus.corrupt => Icons.error_rounded,
+    FileDownloadStatus.failed => Icons.cancel_rounded,
+    FileDownloadStatus.verifying => Icons.verified_rounded,
+    FileDownloadStatus.downloading => Icons.downloading_rounded,
+    FileDownloadStatus.idle => Icons.radio_button_unchecked_rounded,
+  };
 
   IconData _mimeIcon(String mime) {
     if (mime.startsWith('image/')) return Icons.image_rounded;
@@ -594,17 +649,21 @@ class _BottomBar extends StatelessWidget {
           icon: isDone
               ? const Icon(Icons.check_circle_rounded, color: Color(0xFF4CAF50))
               : isIdle
-                  ? const Icon(Icons.download_for_offline_rounded)
-                  : const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    ),
+              ? const Icon(Icons.download_for_offline_rounded)
+              : const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                ),
           label: Text(
-            isDone ? 'Download complete' : isIdle ? 'Download all' : 'Downloading…',
+            isDone
+                ? 'Download complete'
+                : isIdle
+                ? 'Download all'
+                : 'Downloading…',
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w600,

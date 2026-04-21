@@ -60,6 +60,21 @@ class IncomingTransferRemoteDataSource {
       return transfers;
     });
   }
+
+  /// Fetches a specific transfer by ID.
+  /// Used as a fallback if the real-time listener hasn't synced yet.
+  Future<IncomingTransfer?> getTransfer(String transferId) async {
+    final doc = await _firestore.collection('transfers').doc(transferId).get();
+    if (!doc.exists) return null;
+
+    final data = doc.data()!;
+    final filesSnapshot = await doc.reference.collection('files').get();
+    final files = filesSnapshot.docs
+        .map((f) => TransferFile.fromFirestore(f.id, f.data()))
+        .toList();
+
+    return IncomingTransfer.fromFirestore(doc.id, data, files);
+  }
 }
 
 // ---------------------------------------------------------------------------

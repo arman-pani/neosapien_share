@@ -42,15 +42,12 @@
 
 import 'dart:async';
 import 'dart:io';
-import 'dart:developer' as dev;
 
-import 'package:crypto/crypto.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:crypto/crypto.dart';
+import 'package:dio/dio.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
-import 'package:uuid/uuid.dart';
-
-import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../domain/entities/transfer_record.dart';
@@ -98,12 +95,13 @@ class FirebaseTransferRepository implements TransferRepository {
 
   @override
   TransferUploadOperation uploadTransfer({
+    required String transferId,
     required String senderId,
     required String recipientCode,
     required List<TransferUploadFile> files,
   }) {
     return _startTransfer(
-      transferId: const Uuid().v4(),
+      transferId: transferId,
       senderId: senderId,
       recipientCode: recipientCode,
       files: files,
@@ -268,38 +266,45 @@ class FirebaseTransferRepository implements TransferRepository {
         .doc(transferId);
     final expiresAt = DateTime.now().add(const Duration(hours: 72));
 
-    if (!isRetry) {
-      await transferRef.set({
-        'status': 'uploading',
-        'senderId': senderId,
-        'recipientCode': recipientCode,
-        'createdAt': DateTime.now().toUtc(),
-        'expiresAt': expiresAt,
-      });
+    print('[TransferRepo] Initializing Firestore record for $transferId');
+    try {
+      if (!isRetry) {
+        await transferRef.set({
+          'status': 'uploading',
+          'senderId': senderId,
+          'recipientCode': recipientCode,
+          'createdAt': DateTime.now().toUtc(),
+          'expiresAt': expiresAt,
+        });
 
-      for (final file in files) {
-        await transferRef.collection('files').doc(file.fileId).set({
-          'name': file.name,
-          'size': file.sizeInBytes,
-          'mimeType': file.mimeType,
-          'progress': 0.0,
-          'status': 'uploading',
-        });
+        for (final file in files) {
+          await transferRef.collection('files').doc(file.fileId).set({
+            'name': file.name,
+            'size': file.sizeInBytes,
+            'mimeType': file.mimeType,
+            'progress': 0.0,
+            'status': 'uploading',
+          });
+        }
+      } else {
+        // Reset only the retried files back to "uploading".
+        await transferRef.update({'status': 'uploading'});
+        for (final file in files) {
+          await transferRef.collection('files').doc(file.fileId).update({
+            'progress': 0.0,
+            'status': 'uploading',
+          });
+        }
       }
-    } else {
-      // Reset only the retried files back to "uploading".
-      await transferRef.update({'status': 'uploading'});
-      for (final file in files) {
-        await transferRef.collection('files').doc(file.fileId).update({
-          'progress': 0.0,
-          'status': 'uploading',
-        });
-      }
+    } catch (e) {
+      print('[TransferRepo] FAILED to initialize Firestore: $e');
+      rethrow;
     }
 
     for (final file in files) {
       if (_cancelled[transferId] == true) return;
 
+      print('[TransferRepo] Starting upload for file: ${file.name}');
       await _uploadFile(
         transferId: transferId,
         transferRef: transferRef,
@@ -335,8 +340,10 @@ class FirebaseTransferRepository implements TransferRepository {
     }
 
     try {
-      final sourceFile = File(file.path);
-      final sha256Hash = await _computeSha256Stream(sourceFile.openRead());
+      print('[TransferRepo] Calculating SHA-256 for ${file.name} (on background isolate)');
+      final sha256Hash = await compute(_computeFileSha256, file.path);
+      print('[TransferRepo] SHA-256 complete: $sha256Hash');
+
       if (_cancelled[transferId] == true) return;
 
       // 1. Get or create resumable session URI
@@ -344,11 +351,12 @@ class FirebaseTransferRepository implements TransferRepository {
       int offset = 0;
 
       if (sessionUri != null) {
-        dev.log('Found existing session for ${file.name}: $sessionUri');
+        print('[TransferRepo] Found existing resumable session for ${file.name}: $sessionUri');
         // Query current upload status to see how many bytes were already uploaded
         offset = await _querySessionOffset(sessionUri);
-        dev.log('Resuming ${file.name} from offset: $offset');
+        print('[TransferRepo] Resuming ${file.name} from offset: $offset');
       } else {
+        print('[TransferRepo] Initiating NEW resumable upload session for ${file.name}...');
         sessionUri = await _initiateResumableUpload(
           transferId: transferId,
           fileId: file.fileId,
@@ -356,7 +364,7 @@ class FirebaseTransferRepository implements TransferRepository {
           mimeType: file.mimeType,
         );
         await _prefs.setString(sessionKey, sessionUri);
-        dev.log('Initiated new session for ${file.name}: $sessionUri');
+        print('[TransferRepo] Session established: $sessionUri');
       }
 
       if (_cancelled[transferId] == true) return;
@@ -367,7 +375,7 @@ class FirebaseTransferRepository implements TransferRepository {
 
       await _uploadToSession(
         sessionUri: sessionUri,
-        file: sourceFile,
+        file: File(file.path),
         offset: offset,
         cancelToken: cancelToken,
         onProgress: (sent, total) {
@@ -387,9 +395,15 @@ class FirebaseTransferRepository implements TransferRepository {
       await _prefs.remove(sessionKey);
       _activeTasks[transferId]?.remove(file.fileId);
 
-      final storagePath = 'transfers/$transferId/${file.fileId}/${file.name}';
-      final storageRef = _firebaseService.storage.ref().child(storagePath);
-      final storageUrl = await storageRef.getDownloadURL();
+      // Handle the case where the file is zero-byte and was never actually 
+      // uploaded to Storage (Resumable upload skips 0-byte finalize).
+      // We skip fetching a download URL if the file is empty.
+      String? storageUrl;
+      if (file.sizeInBytes > 0) {
+        final storagePath = 'transfers/$transferId/${file.fileId}/${file.name}';
+        final storageRef = _firebaseService.storage.ref().child(storagePath);
+        storageUrl = await storageRef.getDownloadURL();
+      }
 
       updateFile(FileUploadProgress(
         fileId: file.fileId,
@@ -398,15 +412,20 @@ class FirebaseTransferRepository implements TransferRepository {
         status: FileUploadStatus.done,
       ));
 
-      await fileDocRef.update({
+      final updateData = <String, dynamic>{
         'sha256': sha256Hash,
-        'storageUrl': storageUrl,
         'progress': 1.0,
         'status': 'uploaded',
-      });
-    } catch (e) {
+      };
+      if (storageUrl != null) {
+        updateData['storageUrl'] = storageUrl;
+      }
+
+      await fileDocRef.update(updateData);
+    } catch (e, stack) {
       _activeTasks[transferId]?.remove(file.fileId);
-      dev.log('Upload error for ${file.name}: $e');
+      print('[TransferRepo] Upload CRITICAL ERROR for ${file.name}: $e');
+      print('[TransferRepo] Stack trace: \n$stack');
 
       if (_cancelled[transferId] == true) {
         updateFile(FileUploadProgress(
@@ -439,6 +458,7 @@ class FirebaseTransferRepository implements TransferRepository {
     final url =
         'https://firebasestorage.googleapis.com/v0/b/$bucket/o?uploadType=resumable&name=$path';
 
+    print('[TransferRepo] Sending POST to initiate resumable session: $url');
     final response = await _dio.post(
       url,
       options: Options(
@@ -449,9 +469,18 @@ class FirebaseTransferRepository implements TransferRepository {
         },
       ),
     );
+    print('[TransferRepo] Initiation response status: ${response.statusCode}');
 
-    final sessionUri = response.headers.value('location');
+    // Firebase Storage usually returns the session URI in 'x-goog-upload-url'
+    // instead of the standard GCS 'location' header.
+    final sessionUri = response.headers.value('location') 
+                    ?? response.headers.value('x-goog-upload-url');
+
     if (sessionUri == null) {
+      print('[TransferRepo] Session URI MISSING in both Location and x-goog-upload-url.');
+      response.headers.forEach((name, values) {
+        print('  $name: ${values.join(', ')}');
+      });
       throw Exception('Failed to get resumable upload session URI');
     }
     return sessionUri;
@@ -489,6 +518,7 @@ class FirebaseTransferRepository implements TransferRepository {
     // Dio supports piping a Stream as the request body.
     final stream = file.openRead(offset);
 
+    print('[TransferRepo] Starting streaming PUT for ${file.path} from offset $offset');
     await _dio.put(
       sessionUri,
       data: stream,
@@ -505,22 +535,24 @@ class FirebaseTransferRepository implements TransferRepository {
         onProgress(sent + offset, totalSize);
       },
     );
+    print('[TransferRepo] Streaming PUT complete for ${file.path}');
   }
 
   // ---------------------------------------------------------------------------
   // SHA-256: pure streaming — no BytesBuilder, no full-file load
   // ---------------------------------------------------------------------------
 
-  /// Computes the SHA-256 of [byteStream] without ever holding more than a
-  /// single OS-page chunk (≈64 KB) in RAM.
-  ///
-  /// The [sha256.startChunkedConversion] API is designed exactly for this:
-  /// it accumulates only the internal hash state (32 bytes) between chunks.
-  Future<String> _computeSha256Stream(Stream<List<int>> byteStream) async {
+  /// Computes the SHA-256 of the file at [path] in a separate Isolate.
+  static Future<String> _computeFileSha256(String path) async {
+    final file = File(path);
+    if (!await file.exists()) {
+      throw FileSystemException('File does not exist', path);
+    }
+
     final digestSink = _DigestCollector();
     final hashSink = sha256.startChunkedConversion(digestSink);
 
-    await for (final chunk in byteStream) {
+    await for (final chunk in file.openRead()) {
       hashSink.add(chunk);
     }
 

@@ -18,8 +18,6 @@ final incomingTransfersProvider =
 
 class IncomingTransfersNotifier
     extends StreamNotifier<List<IncomingTransfer>> {
-  /// Tracks transfer IDs we have already notified about this session.
-  final _seenIds = <String>{};
 
   @override
   Stream<List<IncomingTransfer>> build() {
@@ -30,16 +28,7 @@ class IncomingTransfersNotifier
     if (myCode == null) return Stream.value([]);
 
     final dataSource = ref.watch(incomingTransferDataSourceProvider);
-    final notificationSvc = ref.watch(notificationServiceProvider);
 
-    return dataSource.watchIncomingTransfers(myCode).map((transfers) {
-      for (final t in transfers) {
-        if (!_seenIds.contains(t.transferId)) {
-          _seenIds.add(t.transferId);
-          notificationSvc.showIncomingTransferNotification(t);
-        }
-      }
-      return transfers;
-    });
+    return dataSource.watchIncomingTransfers(myCode);
   }
 }

@@ -19,7 +19,7 @@ class ReceiveDownloadState {
     this.perFileStatus = const {},
     this.aggregateProgress = 0,
     this.corruptFiles = const [],
-    this.savedPaths = const [],
+    this.filePaths = const {},
   });
 
   final ReceiveDownloadStatus status;
@@ -36,8 +36,8 @@ class ReceiveDownloadState {
   /// Names of files that failed SHA-256 verification
   final List<String> corruptFiles;
 
-  /// Paths of successfully saved files
-  final List<String> savedPaths;
+  /// Map of fileId -> local saved path
+  final Map<String, String> filePaths;
 
   bool get hasCorruption => corruptFiles.isNotEmpty;
 
@@ -47,7 +47,7 @@ class ReceiveDownloadState {
     Map<String, FileDownloadStatus>? perFileStatus,
     double? aggregateProgress,
     List<String>? corruptFiles,
-    List<String>? savedPaths,
+    Map<String, String>? filePaths,
   }) {
     return ReceiveDownloadState(
       status: status ?? this.status,
@@ -55,7 +55,7 @@ class ReceiveDownloadState {
       perFileStatus: perFileStatus ?? this.perFileStatus,
       aggregateProgress: aggregateProgress ?? this.aggregateProgress,
       corruptFiles: corruptFiles ?? this.corruptFiles,
-      savedPaths: savedPaths ?? this.savedPaths,
+      filePaths: filePaths ?? this.filePaths,
     );
   }
 }
@@ -95,7 +95,6 @@ class ReceiveDownloadNotifier
     final fileSizes = {for (final f in files) f.fileId: f.size};
     final totalBytes = transfer.totalBytes.toDouble().clamp(1, double.infinity);
 
-    final savedPaths = <String>[];
     final corruptFiles = <String>[];
 
     state = state.copyWith(
@@ -131,13 +130,13 @@ class ReceiveDownloadNotifier
       // Record outcome
       final finalStatus = perFileStatus[file.fileId];
       if (finalStatus == FileDownloadStatus.done) {
-        // savedPath was emitted as the last event's savedPath; we read it from
-        // the last emitted event indirectly via state, so we re-check here.
-        // The actual path emitted lives only in the event stream; re-derive:
         final dir = await _ref.read(receiveRepositoryProvider).resolveDownloadDir(
           _transferId,
         );
-        savedPaths.add('${dir.path}/${file.name}');
+        final path = '${dir.path}/${file.name}';
+        state = state.copyWith(
+          filePaths: {...state.filePaths, file.fileId: path},
+        );
       } else if (finalStatus == FileDownloadStatus.corrupt) {
         corruptFiles.add(file.name);
       }
@@ -149,7 +148,6 @@ class ReceiveDownloadNotifier
       perFileStatus: Map.of(perFileStatus),
       aggregateProgress: 1.0,
       corruptFiles: corruptFiles,
-      savedPaths: savedPaths,
     );
   }
 }

@@ -335,10 +335,32 @@ class _FileSelectorScreenState extends ConsumerState<FileSelectorScreen> {
   }
 
   Future<void> _startSend() async {
-    final identity = ref.read(identityProvider).valueOrNull;
-    if (identity == null || _selectedFiles.isEmpty) return;
+    print('[UI] _startSend triggered');
+    final identityState = ref.read(identityProvider);
+    
+    if (identityState.isLoading) {
+      print('[UI] _startSend aborted: identity is still loading');
+      return;
+    }
+    
+    if (identityState.hasError) {
+      print('[UI] _startSend aborted: identity error: ${identityState.error}');
+      return;
+    }
+
+    final identity = identityState.valueOrNull;
+    if (identity == null) {
+      print('[UI] _startSend aborted: identity is null (no error, just null)');
+      return;
+    }
+    
+    if (_selectedFiles.isEmpty) {
+      print('[UI] _startSend aborted: no files selected');
+      return;
+    }
 
     final transferId = const Uuid().v4();
+    print('[UI] Starting send for $transferId with sender ${identity.shortCode}');
 
     // Build typed file list (filter out files with no path).
     final uploadFiles = _selectedFiles

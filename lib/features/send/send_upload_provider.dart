@@ -87,7 +87,7 @@ class SendUploadState {
 // success/cancel, but not during rotation (the widget re-subscribes).
 // ---------------------------------------------------------------------------
 
-final sendUploadProvider = StateNotifierProvider.autoDispose
+final sendUploadProvider = StateNotifierProvider
     .family<SendUploadNotifier, SendUploadState, String>(
   (ref, transferId) => SendUploadNotifier(
     ref.watch(transferRepositoryProvider),
@@ -132,7 +132,11 @@ class SendUploadNotifier extends StateNotifier<SendUploadState> {
     required String recipientCode,
     required List<TransferUploadFile> files,
   }) {
-    if (state.phase == SendPhase.uploading) return; // already running
+    print('[Provider] startUpload called with ${files.length} files');
+    if (state.phase == SendPhase.uploading) {
+      print('[Provider] startUpload ignored: already uploading');
+      return;
+    }
 
     state = state.copyWith(
       phase: SendPhase.uploading,
@@ -152,6 +156,7 @@ class SendUploadNotifier extends StateNotifier<SendUploadState> {
     );
 
     final operation = _repository.uploadTransfer(
+      transferId: state.transferId,
       senderId: senderId,
       recipientCode: recipientCode,
       files: files,
