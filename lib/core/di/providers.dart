@@ -1,5 +1,5 @@
 import 'package:dio/dio.dart';
-import 'package:neosapien_share/data/transfer_repository.dart';
+import 'package:neosapien_share/data/repositories/transfer_repository.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';

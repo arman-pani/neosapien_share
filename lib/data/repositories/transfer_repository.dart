@@ -50,10 +50,10 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../domain/entities/transfer_record.dart';
-import '../domain/interfaces/transfer_repository.dart';
-import 'remote_data_sources/firebase_service.dart';
-import 'remote_data_sources/transfer_remote_data_source.dart';
+import '../../domain/entities/transfer_record.dart';
+import '../../domain/interfaces/transfer_repository.dart';
+import '../remote_data_sources/firebase_service.dart';
+import '../remote_data_sources/transfer_remote_data_source.dart';
 
 class FirebaseTransferRepository implements TransferRepository {
   FirebaseTransferRepository({
@@ -164,8 +164,9 @@ class FirebaseTransferRepository implements TransferRepository {
 
     // Delete any partial Storage objects for this transfer.
     try {
-      final storageRef =
-          _firebaseService.storage.ref().child('transfers/$transferId');
+      final storageRef = _firebaseService.storage.ref().child(
+        'transfers/$transferId',
+      );
       await _deleteStoragePrefix(storageRef);
     } catch (_) {}
   }
@@ -232,18 +233,19 @@ class FirebaseTransferRepository implements TransferRepository {
 
     emitProgress();
 
-    final completion = _runUpload(
-      transferId: transferId,
-      senderId: senderId,
-      recipientCode: recipientCode,
-      files: files,
-      perFileProgress: perFileProgress,
-      emitProgress: emitProgress,
-      isRetry: isRetry,
-    ).whenComplete(() async {
-      emitProgress();
-      await progressController.close();
-    });
+    final completion =
+        _runUpload(
+          transferId: transferId,
+          senderId: senderId,
+          recipientCode: recipientCode,
+          files: files,
+          perFileProgress: perFileProgress,
+          emitProgress: emitProgress,
+          isRetry: isRetry,
+        ).whenComplete(() async {
+          emitProgress();
+          await progressController.close();
+        });
 
     return TransferUploadOperation(
       transferId: transferId,
@@ -265,7 +267,6 @@ class FirebaseTransferRepository implements TransferRepository {
         .collection('transfers')
         .doc(transferId);
     final expiresAt = DateTime.now().add(const Duration(hours: 72));
-
 
     try {
       if (!isRetry) {
@@ -297,13 +298,11 @@ class FirebaseTransferRepository implements TransferRepository {
         }
       }
     } catch (e) {
-
       rethrow;
     }
 
     for (final file in files) {
       if (_cancelled[transferId] == true) return;
-
 
       await _uploadFile(
         transferId: transferId,
@@ -317,8 +316,9 @@ class FirebaseTransferRepository implements TransferRepository {
     if (_cancelled[transferId] == true) return;
 
     // Only mark ready if ALL files are done (none failed).
-    final hasFailure = perFileProgress.values
-        .any((p) => p.status == FileUploadStatus.failed);
+    final hasFailure = perFileProgress.values.any(
+      (p) => p.status == FileUploadStatus.failed,
+    );
     if (!hasFailure) {
       await transferRef.update({'status': 'ready'});
     }
@@ -340,9 +340,7 @@ class FirebaseTransferRepository implements TransferRepository {
     }
 
     try {
-
       final sha256Hash = await compute(_computeFileSha256, file.path);
-
 
       if (_cancelled[transferId] == true) return;
 
@@ -351,12 +349,9 @@ class FirebaseTransferRepository implements TransferRepository {
       int offset = 0;
 
       if (sessionUri != null) {
-
         // Query current upload status to see how many bytes were already uploaded
         offset = await _querySessionOffset(sessionUri);
-
       } else {
-
         sessionUri = await _initiateResumableUpload(
           transferId: transferId,
           fileId: file.fileId,
@@ -364,7 +359,6 @@ class FirebaseTransferRepository implements TransferRepository {
           mimeType: file.mimeType,
         );
         await _prefs.setString(sessionKey, sessionUri);
-
       }
 
       if (_cancelled[transferId] == true) return;
@@ -379,12 +373,14 @@ class FirebaseTransferRepository implements TransferRepository {
         offset: offset,
         cancelToken: cancelToken,
         onProgress: (sent, total) {
-          updateFile(FileUploadProgress(
-            fileId: file.fileId,
-            bytesTransferred: sent,
-            totalBytes: total,
-            status: FileUploadStatus.uploading,
-          ));
+          updateFile(
+            FileUploadProgress(
+              fileId: file.fileId,
+              bytesTransferred: sent,
+              totalBytes: total,
+              status: FileUploadStatus.uploading,
+            ),
+          );
           fileDocRef.update({'progress': sent / total}).catchError((_) {});
         },
       );
@@ -395,7 +391,7 @@ class FirebaseTransferRepository implements TransferRepository {
       await _prefs.remove(sessionKey);
       _activeTasks[transferId]?.remove(file.fileId);
 
-      // Handle the case where the file is zero-byte and was never actually 
+      // Handle the case where the file is zero-byte and was never actually
       // uploaded to Storage (Resumable upload skips 0-byte finalize).
       // We skip fetching a download URL if the file is empty.
       String? storageUrl;
@@ -405,12 +401,14 @@ class FirebaseTransferRepository implements TransferRepository {
         storageUrl = await storageRef.getDownloadURL();
       }
 
-      updateFile(FileUploadProgress(
-        fileId: file.fileId,
-        bytesTransferred: file.sizeInBytes,
-        totalBytes: file.sizeInBytes,
-        status: FileUploadStatus.done,
-      ));
+      updateFile(
+        FileUploadProgress(
+          fileId: file.fileId,
+          bytesTransferred: file.sizeInBytes,
+          totalBytes: file.sizeInBytes,
+          status: FileUploadStatus.done,
+        ),
+      );
 
       final updateData = <String, dynamic>{
         'sha256': sha256Hash,
@@ -425,23 +423,26 @@ class FirebaseTransferRepository implements TransferRepository {
     } catch (e) {
       _activeTasks[transferId]?.remove(file.fileId);
 
-
       if (_cancelled[transferId] == true) {
-        updateFile(FileUploadProgress(
-          fileId: file.fileId,
-          bytesTransferred: 0,
-          totalBytes: file.sizeInBytes,
-          status: FileUploadStatus.cancelled,
-        ));
+        updateFile(
+          FileUploadProgress(
+            fileId: file.fileId,
+            bytesTransferred: 0,
+            totalBytes: file.sizeInBytes,
+            status: FileUploadStatus.cancelled,
+          ),
+        );
         return;
       }
 
-      updateFile(FileUploadProgress(
-        fileId: file.fileId,
-        bytesTransferred: 0,
-        totalBytes: file.sizeInBytes,
-        status: FileUploadStatus.failed,
-      ));
+      updateFile(
+        FileUploadProgress(
+          fileId: file.fileId,
+          bytesTransferred: 0,
+          totalBytes: file.sizeInBytes,
+          status: FileUploadStatus.failed,
+        ),
+      );
       await fileDocRef.update({'status': 'failed'}).catchError((_) {});
     }
   }
@@ -457,7 +458,6 @@ class FirebaseTransferRepository implements TransferRepository {
     final url =
         'https://firebasestorage.googleapis.com/v0/b/$bucket/o?uploadType=resumable&name=$path';
 
-
     final response = await _dio.post(
       url,
       options: Options(
@@ -469,14 +469,13 @@ class FirebaseTransferRepository implements TransferRepository {
       ),
     );
 
-
     // Firebase Storage usually returns the session URI in 'x-goog-upload-url'
     // instead of the standard GCS 'location' header.
-    final sessionUri = response.headers.value('location') 
-                    ?? response.headers.value('x-goog-upload-url');
+    final sessionUri =
+        response.headers.value('location') ??
+        response.headers.value('x-goog-upload-url');
 
     if (sessionUri == null) {
-
       throw Exception('Failed to get resumable upload session URI');
     }
     return sessionUri;
@@ -487,9 +486,7 @@ class FirebaseTransferRepository implements TransferRepository {
       final response = await _dio.put(
         sessionUri,
         options: Options(
-          headers: {
-            'X-Goog-Upload-Command': 'query',
-          },
+          headers: {'X-Goog-Upload-Command': 'query'},
           validateStatus: (status) => status == 200 || status == 308,
         ),
       );
@@ -514,7 +511,6 @@ class FirebaseTransferRepository implements TransferRepository {
     // Dio supports piping a Stream as the request body.
     final stream = file.openRead(offset);
 
-
     await _dio.put(
       sessionUri,
       data: stream,
@@ -531,7 +527,6 @@ class FirebaseTransferRepository implements TransferRepository {
         onProgress(sent + offset, totalSize);
       },
     );
-
   }
 
   // ---------------------------------------------------------------------------
@@ -578,18 +573,18 @@ class FirebaseTransferRepository implements TransferRepository {
         .doc(transferId)
         .snapshots()
         .map((snap) {
-      if (!snap.exists) return TransferDeliveryStatus.unknown;
-      final status = snap.data()?['status'] as String? ?? '';
-      return switch (status) {
-        'uploading' => TransferDeliveryStatus.uploading,
-        'queued'    => TransferDeliveryStatus.queued,
-        'ready'     => TransferDeliveryStatus.ready,
-        'delivered' => TransferDeliveryStatus.delivered,
-        'expired'   => TransferDeliveryStatus.expired,
-        'cancelled' => TransferDeliveryStatus.cancelled,
-        _           => TransferDeliveryStatus.unknown,
-      };
-    });
+          if (!snap.exists) return TransferDeliveryStatus.unknown;
+          final status = snap.data()?['status'] as String? ?? '';
+          return switch (status) {
+            'uploading' => TransferDeliveryStatus.uploading,
+            'queued' => TransferDeliveryStatus.queued,
+            'ready' => TransferDeliveryStatus.ready,
+            'delivered' => TransferDeliveryStatus.delivered,
+            'expired' => TransferDeliveryStatus.expired,
+            'cancelled' => TransferDeliveryStatus.cancelled,
+            _ => TransferDeliveryStatus.unknown,
+          };
+        });
   }
 
   @override
