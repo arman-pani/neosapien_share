@@ -1,18 +1,20 @@
 import 'package:dio/dio.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:neosapien_share/data/repositories/transfer_repository.dart';
+import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../core/services/connectivity_service.dart';
+import 'package:neosapien_share/core/services/connectivity_service.dart';
 
-import '../../data/transfer_repository.dart';
-import '../../data/remote_data_sources/transfer_remote_data_source.dart';
-import '../../data/remote_data_sources/firebase_service.dart';
-import '../../data/remote_data_sources/incoming_transfer_remote_data_source.dart';
-import '../../data/repositories/receive_repository.dart';
-import '../../domain/interfaces/transfer_repository.dart';
-import '../../features/receive/notification_service.dart';
-import '../router/app_router.dart';
+import 'package:neosapien_share/data/remote_data_sources/transfer_remote_data_source.dart';
+import 'package:neosapien_share/data/remote_data_sources/firebase_service.dart';
+import 'package:neosapien_share/data/remote_data_sources/incoming_transfer_remote_data_source.dart';
+import 'package:neosapien_share/data/repositories/receive_repository.dart';
+import 'package:neosapien_share/domain/interfaces/transfer_repository.dart';
+import 'package:neosapien_share/core/services/notification_service.dart';
+import 'package:neosapien_share/core/router/app_router.dart';
+
+part 'providers.g.dart';
 
 final connectivityServiceProvider = Provider<ConnectivityService>(
   (ref) => ConnectivityService.instance,
@@ -47,9 +49,13 @@ final transferRepositoryProvider = Provider<TransferRepository>(
   ),
 );
 
-final pendingResumptionsProvider = FutureProvider<List<PendingResumption>>(
-  (ref) => ref.watch(transferRepositoryProvider).getPendingResumableTransfers(),
-);
+@riverpod
+class PendingResumptions extends _$PendingResumptions {
+  @override
+  Future<List<PendingResumption>> build() {
+    return ref.watch(transferRepositoryProvider).getPendingResumableTransfers();
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Receive deps
@@ -57,15 +63,18 @@ final pendingResumptionsProvider = FutureProvider<List<PendingResumption>>(
 
 final incomingTransferDataSourceProvider =
     Provider<IncomingTransferRemoteDataSource>(
-  (ref) => IncomingTransferRemoteDataSource(
-    ref.watch(firebaseServiceProvider).firestore,
-  ),
-);
+      (ref) => IncomingTransferRemoteDataSource(
+        ref.watch(firebaseServiceProvider).firestore,
+      ),
+    );
 
 final _dioProvider = Provider<Dio>((ref) => Dio());
 
 final receiveRepositoryProvider = Provider<ReceiveRepository>(
-  (ref) => ReceiveRepository(dio: ref.watch(_dioProvider)),
+  (ref) => ReceiveRepository(
+    dio: ref.watch(_dioProvider),
+    dataSource: ref.watch(incomingTransferDataSourceProvider),
+  ),
 );
 
 final notificationServiceProvider = Provider<NotificationService>(

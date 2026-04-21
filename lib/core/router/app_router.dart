@@ -1,22 +1,22 @@
 import 'package:go_router/go_router.dart';
 
 import '../constants/app_constants.dart';
-import '../../features/identity/identity_loading_screen.dart';
-import '../../features/identity/presentation/home_screen.dart';
-import '../../features/send/file_selector_screen.dart';
-import '../../features/send/presentation/send_screen.dart';
-import '../../features/send/send_progress_screen.dart';
-import '../../features/receive/presentation/receive_screen.dart';
+import 'package:neosapien_share/features/identity/presentation/screens/identity_loading_screen.dart';
+import 'package:neosapien_share/features/identity/presentation/screens/home_screen.dart';
+import 'package:neosapien_share/features/send/presentation/screens/file_selector_screen.dart';
+import 'package:neosapien_share/features/send/presentation/screens/send_screen.dart';
+import 'package:neosapien_share/features/send/presentation/screens/send_progress_screen.dart';
+import 'package:neosapien_share/features/receive/presentation/screens/receive_screen.dart';
 
 class AppRoutes {
   const AppRoutes._();
 
-  static const loading      = '/';
-  static const home         = '/home';
-  static const send         = '/send';
+  static const loading = '/';
+  static const home = '/home';
+  static const send = '/send';
   static const fileSelector = '/send/select/:recipientCode';
   static const sendProgress = '/send/progress/:transferId/:recipientCode';
-  static const receive      = '/receive/:transferId';
+  static const receive = '/receive/:transferId';
 
   static String fileSelectorPath(String recipientCode) =>
       '/send/select/$recipientCode';
@@ -63,7 +63,7 @@ class AppRouter {
         path: AppRoutes.sendProgress,
         pageBuilder: (context, state) => NoTransitionPage<void>(
           child: SendProgressScreen(
-            transferId:    state.pathParameters['transferId']    ?? '',
+            transferId: state.pathParameters['transferId'] ?? '',
             recipientCode: state.pathParameters['recipientCode'] ?? '',
           ),
         ),

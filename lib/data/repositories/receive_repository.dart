@@ -42,9 +42,14 @@ import '../remote_data_sources/incoming_transfer_remote_data_source.dart';
 
 /// High-level repository for the receive flow.
 class ReceiveRepository {
-  ReceiveRepository({required Dio dio}) : _dio = dio;
+  ReceiveRepository({
+    required Dio dio,
+    required IncomingTransferRemoteDataSource dataSource,
+  })  : _dio = dio,
+        _dataSource = dataSource;
 
   final Dio _dio;
+  final IncomingTransferRemoteDataSource _dataSource;
 
   // -------------------------------------------------------------------------
   // downloadFile
@@ -210,6 +215,11 @@ class ReceiveRepository {
     final dir = Directory('${base.path}/neosapienShare/downloads/$transferId');
     if (!await dir.exists()) await dir.create(recursive: true);
     return dir;
+  }
+
+  /// Sets the transfer status to "delivered" in Firestore.
+  Future<void> markAsDelivered(String transferId) async {
+    await _dataSource.updateTransferStatus(transferId, 'delivered');
   }
 }
 
